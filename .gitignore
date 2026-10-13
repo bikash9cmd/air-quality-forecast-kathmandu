@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+data/raw/*
+!data/raw/.gitkeep
+artifacts/model/
+artifacts/forecasts/
+artifacts/reports/*.parquet
+.aws-sam/
+.DS_Store

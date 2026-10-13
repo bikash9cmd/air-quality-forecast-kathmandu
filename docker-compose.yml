@@ -1,0 +1,21 @@
+# docker compose run --rm pipeline   -> download data, backtest, train, replay a week
+# docker compose up api              -> serve forecasts on http://localhost:8000
+services:
+  pipeline:
+    build: .
+    volumes: [hawa-data:/app/data, hawa-artifacts:/app/artifacts]
+    command: >
+      sh -c "python -m hawa download &&
+             python -m hawa quality &&
+             python -m hawa train --until 2017-12-01 &&
+             python -m hawa replay --start 2017-12-01T00:00 --end 2017-12-07T23:00"
+  api:
+    build: .
+    ports: ["8000:8000"]
+    volumes: [hawa-artifacts:/app/artifacts]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/stations')"]
+      interval: 30s
+volumes:
+  hawa-data:
+  hawa-artifacts:

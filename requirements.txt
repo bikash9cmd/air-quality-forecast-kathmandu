@@ -1,0 +1,9 @@
+# Runtime (pinned: the backtest numbers in the README were produced with exactly these)
+pandas==3.0.6
+numpy==2.5.4
+scikit-learn==1.9.1
+lightgbm==4.7.0
+joblib
+fastapi==0.143.0
+uvicorn==0.54.0
+boto3==1.43.112

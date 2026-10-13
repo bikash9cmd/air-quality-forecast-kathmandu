@@ -1,0 +1,19 @@
+[project]
+name = "hawa"
+version = "1.0.0"
+description = "Hour-by-hour PM2.5 forecasts and health alerts for the Kathmandu Valley"
+requires-python = ">=3.12"
+readme = "README.md"
+license = {text = "MIT"}
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: trains real models (about a minute)"]

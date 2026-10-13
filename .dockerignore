@@ -1,0 +1,7 @@
+.venv
+.git
+data
+artifacts
+docs
+tests
+.aws-sam

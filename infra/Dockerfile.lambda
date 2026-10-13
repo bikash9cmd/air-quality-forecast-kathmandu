@@ -1,0 +1,7 @@
+# One image, four Lambda functions; template.yaml picks the handler with ImageConfig.Command.
+FROM public.ecr.aws/lambda/python:3.12-arm64
+RUN dnf install -y libgomp && dnf clean all
+COPY requirements.txt ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
+COPY hawa ${LAMBDA_TASK_ROOT}/hawa
+CMD ["hawa.aws.handlers.api_handler"]

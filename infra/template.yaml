@@ -1,0 +1,336 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Hawa - Kathmandu Valley PM2.5 early warning. Serverless, event-driven, scales to zero.
+  Deploy: see infra/README.md. Estimated cost: docs/COST.md.
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Optional email to subscribe to air-quality alerts (confirm the email AWS sends).
+  OpsEmail:
+    Type: String
+    Default: ""
+    Description: Optional email for operational alarms and the budget warning.
+  ReplayOffsetDays:
+    Type: String
+    Default: "3200"
+    Description: >
+      Shift 'now' this many days into the past so the system runs on the 2016-17 historical
+      feed. Set to 0 once a live data source is wired in.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 10
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+  HasOpsEmail: !Not [!Equals [!Ref OpsEmail, ""]]
+
+Globals:
+  Function:
+    # Graviton: about 20% cheaper per GB-second than x86 for the same work.
+    Architectures: [arm64]
+    Tracing: Active
+    Environment:
+      Variables:
+        DATA_BUCKET: !Ref DataBucket
+        READINGS_TABLE: !Ref ReadingsTable
+        FORECAST_TABLE: !Ref ForecastsTable
+        CHAMPION_PARAM: !Ref ChampionParam
+        ALERT_TOPIC: !Ref AlertTopic
+        REPLAY_OFFSET_DAYS: !Ref ReplayOffsetDays
+        HAWA_ARTIFACT_DIR: /tmp/hawa
+
+Resources:
+  # ---------------- storage ----------------
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          # Old model versions are only needed for rollback; keep 90 days.
+          - Id: expire-old-models
+            Status: Enabled
+            Prefix: models/
+            NoncurrentVersionExpiration: {NoncurrentDays: 90}
+          # No IA/Glacier transition for raw/: objects are ~200 bytes, below the 128 KB
+          # minimum billable size for IA, so a transition would cost more than it saves.
+
+  ReadingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: station, AttributeType: S}
+        - {AttributeName: ts, AttributeType: S}
+      KeySchema:
+        - {AttributeName: station, KeyType: HASH}
+        - {AttributeName: ts, KeyType: RANGE}
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+
+  ForecastsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: station, AttributeType: S}
+        - {AttributeName: issued_at, AttributeType: S}
+      KeySchema:
+        - {AttributeName: station, KeyType: HASH}
+        - {AttributeName: issued_at, KeyType: RANGE}
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: false}
+
+  ChampionParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /hawa/champion-model-version
+      Type: String
+      Value: bootstrap
+      Description: S3 prefix under models/ of the model the forecaster serves. Change it to roll back.
+
+  # ---------------- messaging ----------------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: hawa-air-alerts
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties: {TopicArn: !Ref AlertTopic, Protocol: email, Endpoint: !Ref AlertEmail}
+
+  OpsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: hawa-ops
+
+  OpsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasOpsEmail
+    Properties: {TopicArn: !Ref OpsTopic, Protocol: email, Endpoint: !Ref OpsEmail}
+
+  SchedulerDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+
+  # ---------------- compute ----------------
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Metadata: {DockerContext: .., Dockerfile: infra/Dockerfile.lambda, DockerTag: v1}
+    Properties:
+      PackageType: Image
+      ImageConfig: {Command: ["hawa.aws.handlers.ingest_handler"]}
+      MemorySize: 512
+      Timeout: 60
+      Policies:
+        - S3CrudPolicy: {BucketName: !Ref DataBucket}
+        - DynamoDBCrudPolicy: {TableName: !Ref ReadingsTable}
+      Events:
+        Hourly:
+          Type: ScheduleV2
+          Properties:
+            # Minute 5 of every hour: give the monitoring network time to publish the last hour.
+            ScheduleExpression: cron(5 * * * ? *)
+            RetryPolicy: {MaximumRetryAttempts: 3, MaximumEventAgeInSeconds: 1800}
+            DeadLetterConfig: {Arn: !GetAtt SchedulerDLQ.Arn}
+
+  ForecastFunction:
+    Type: AWS::Serverless::Function
+    Metadata: {DockerContext: .., Dockerfile: infra/Dockerfile.lambda, DockerTag: v1}
+    Properties:
+      PackageType: Image
+      ImageConfig: {Command: ["hawa.aws.handlers.forecast_handler"]}
+      MemorySize: 1024
+      Timeout: 120
+      # One forecast run at a time; a late retry must not race the next hour's run.
+      ReservedConcurrentExecutions: 1
+      Policies:
+        - S3ReadPolicy: {BucketName: !Ref DataBucket}
+        - DynamoDBReadPolicy: {TableName: !Ref ReadingsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ForecastsTable}
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt AlertTopic.TopicName}
+        - SSMParameterReadPolicy: {ParameterName: hawa/champion-model-version}
+      Events:
+        Hourly:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(15 * * * ? *)
+            RetryPolicy: {MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 1800}
+            DeadLetterConfig: {Arn: !GetAtt SchedulerDLQ.Arn}
+
+  RetrainFunction:
+    Type: AWS::Serverless::Function
+    Metadata: {DockerContext: .., Dockerfile: infra/Dockerfile.lambda, DockerTag: v1}
+    Properties:
+      PackageType: Image
+      ImageConfig: {Command: ["hawa.aws.handlers.retrain_handler"]}
+      # ~20k rows x 24 horizons trains in about a minute; Lambda is far cheaper than a
+      # SageMaker training job at this size (see docs/ALTERNATIVES.md, ADR-004).
+      MemorySize: 4096
+      Timeout: 900
+      EphemeralStorage: {Size: 2048}
+      Policies:
+        - S3CrudPolicy: {BucketName: !Ref DataBucket}
+        - SSMParameterReadPolicy: {ParameterName: hawa/champion-model-version}
+        - Statement:
+            - Effect: Allow
+              Action: ssm:PutParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/hawa/champion-model-version
+      Events:
+        Weekly:
+          Type: ScheduleV2
+          Properties:
+            # Friday 20:15 UTC = Saturday 02:00 Nepal time, the quietest hour of Nepal's weekend.
+            ScheduleExpression: cron(15 20 ? * FRI *)
+            DeadLetterConfig: {Arn: !GetAtt SchedulerDLQ.Arn}
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata: {DockerContext: .., Dockerfile: infra/Dockerfile.lambda, DockerTag: v1}
+    Properties:
+      PackageType: Image
+      ImageConfig: {Command: ["hawa.aws.handlers.api_handler"]}
+      MemorySize: 512
+      Timeout: 10
+      Policies:
+        - DynamoDBReadPolicy: {TableName: !Ref ForecastsTable}
+      Events:
+        Forecast:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: "/forecast/{station}", Method: GET}
+        Alert:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: "/forecast/{station}/alert", Method: GET}
+        Health:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Path: /health, Method: GET}
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      # Forecasts change once an hour; throttle so a scraper can't run up the bill.
+      DefaultRouteSettings: {ThrottlingBurstLimit: 20, ThrottlingRateLimit: 10}
+
+  # Log retention: CloudWatch keeps logs forever by default, which is a slow cost leak.
+  IngestLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub "/aws/lambda/${IngestFunction}", RetentionInDays: 14}
+  ForecastLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub "/aws/lambda/${ForecastFunction}", RetentionInDays: 14}
+  RetrainLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub "/aws/lambda/${RetrainFunction}", RetentionInDays: 30}
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub "/aws/lambda/${ApiFunction}", RetentionInDays: 7}
+
+  # ---------------- alarms ----------------
+  ForecastErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Forecast job failed two hours in a row - no fresh forecasts are being published.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{Name: FunctionName, Value: !Ref ForecastFunction}]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OpsTopic]
+
+  ForecastNotRunningAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: The forecast job has not run at all for 3 hours (schedule broken or disabled).
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions: [{Name: FunctionName, Value: !Ref ForecastFunction}]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref OpsTopic]
+
+  SensorDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: A station has been missing readings for 6 straight hours; forecasts are on the neighbour fallback.
+      Namespace: Hawa
+      MetricName: MissingReading
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 6
+      DatapointsToAlarm: 6
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OpsTopic]
+
+  RetrainGateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Weekly retrain was rejected by the promotion gate; the old model is still serving.
+      Namespace: Hawa
+      MetricName: RetrainGatePassed
+      Statistic: Minimum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OpsTopic]
+
+  DLQNotEmptyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: A scheduled run was dropped after all retries.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{Name: QueueName, Value: !GetAtt SchedulerDLQ.QueueName}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions: [!Ref OpsTopic]
+
+  # ---------------- cost guardrail ----------------
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasOpsEmail
+    Properties:
+      Budget:
+        BudgetName: hawa-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: !Ref MonthlyBudgetUsd, Unit: USD}
+      NotificationsWithSubscribers:
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref OpsEmail}]
+        - Notification: {NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref OpsEmail}]
+
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  DataBucketName:
+    Value: !Ref DataBucket
+  AlertTopicArn:
+    Value: !Ref AlertTopic
