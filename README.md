@@ -1,5 +1,7 @@
 # Hawa (हावा): hour-by-hour air-quality forecasts for the Kathmandu Valley
 
+[![Try it live](https://img.shields.io/badge/Try_it-live-2ea44f?style=for-the-badge)](https://hawa-kathmandu-air.onrender.com)
+
 Hawa forecasts PM2.5 for each of the next 24 hours at the Kathmandu Valley's government monitoring stations, warns when the next day is likely to break Nepal's air-quality standard, and tells people which hours will be cleanest. It is built on real Department of Environment sensor data, backtested month by month, and designed to run on AWS for about **$2.60 a month**.
 
 ```text
@@ -93,6 +95,16 @@ Serverless and event-driven because the workload is tiny and bursty: two reading
 | Performance efficiency | Batch inference; model cached across warm Lambda starts; one DynamoDB query loads the hot window |
 | Cost optimisation | Scales to zero; Graviton; HTTP API; on-demand DynamoDB with TTL; budget alarm. About $2.60/month |
 | Sustainability | No idle compute; 4-leaf trees trained on every 3rd hour; the smallest model that matched bigger ones |
+
+## Try it live
+
+**[https://hawa-kathmandu-air.onrender.com](https://hawa-kathmandu-air.onrender.com)**
+
+Pick an hour and a station and see the next 24 hours of PM2.5 forecast, the bilingual alert, and what the sensor actually measured.
+
+It runs on a free server that sleeps when nobody is using it, so the first visit can take a minute to wake up. Everything runs offline: no API keys, no cloud account.
+
+To run the same page locally: `pip install -r requirements-app.txt` and then `streamlit run app.py`.
 
 ## Run it
 

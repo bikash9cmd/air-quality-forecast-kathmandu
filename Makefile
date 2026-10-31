@@ -1,6 +1,6 @@
 PY ?= python
 
-.PHONY: setup data quality backtest train replay serve test lint docker-up validate-infra
+.PHONY: setup data quality backtest train replay serve test lint docker-up validate-infra app
 
 setup:            ## create a virtualenv with dev dependencies
 	$(PY) -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
@@ -34,3 +34,6 @@ validate-infra:   ## lint the CloudFormation/SAM template
 
 docker-up:
 	docker compose run --rm pipeline && docker compose up api
+
+app:              ## the Streamlit demo on http://localhost:8501 (pip install -r requirements-app.txt first)
+	$(PY) -m streamlit run app.py
