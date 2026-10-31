@@ -11,12 +11,13 @@ from datetime import date, datetime, time
 import pandas as pd
 import streamlit as st
 
+import brand
 from hawa import config, data
 from hawa.alerts import message, should_alert
 from hawa.forecast import forecast
 from hawa.models import Forecaster
 
-st.set_page_config(page_title="Hawa", page_icon="🌫️", layout="centered")
+brand.page("hawa")
 
 STANDARD = 40  # Nepal's 24-hour PM2.5 standard, ug/m3
 
@@ -41,8 +42,6 @@ def load():
 
 wide, model = load()
 
-st.title("Hawa (हावा)")
-st.caption("Hour-by-hour PM2.5 forecasts for the Kathmandu Valley's government monitoring stations.")
 
 c1, c2, c3 = st.columns(3)
 day = c1.date_input(
@@ -86,3 +85,5 @@ m3.metric("Exceeds the standard", d["exceeds_standard"])
 st.line_chart(chart, y_label="PM2.5 µg/m³")
 if d.get("mode") != "primary" or d.get("note"):
     st.info(f"Mode: {d.get('mode')}. {d.get('note', '')}")
+
+brand.footer()
