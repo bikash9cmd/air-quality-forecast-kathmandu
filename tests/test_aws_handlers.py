@@ -83,7 +83,15 @@ def test_ingest_then_forecast_then_api(aws_env):
     assert np.isfinite(body["next24h_mean_p50"])
 
     assert handlers.api_handler({"rawPath": "/forecast/nowhere"})["statusCode"] == 404
-    assert json.loads(handlers.api_handler({"rawPath": "/health"})["body"])["ok"] is True
+    health = handlers.api_handler({"rawPath": "/health", "now": str(now)})
+    assert health["statusCode"] == 200 and json.loads(health["body"])["ok"] is True
+    assert health["headers"]["cache-control"] == "no-store"
+
+    # Three hours later with no new forecast run: the job has stopped, and /health must say so.
+    later = handlers.api_handler({"rawPath": "/health", "now": str(now + pd.Timedelta(hours=3))})
+    assert later["statusCode"] == 503
+    body = json.loads(later["body"])
+    assert body["ok"] is False and body["stations"]["ratnapark"]["fresh"] is False
 
 
 def test_forecast_falls_back_when_a_sensor_goes_dark(aws_env):

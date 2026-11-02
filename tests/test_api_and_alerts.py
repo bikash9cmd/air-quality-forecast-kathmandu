@@ -39,10 +39,13 @@ def test_api_routes(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "store", store)
     client = TestClient(api.app)
     assert client.get("/forecast/ratnapark").status_code == 503  # nothing yet
+    assert client.get("/health").status_code == 503
     store.put(_fc(45.2, 64.0).as_dict())
     store.put(_fc(20.0, 30.0).as_dict() | {"station": "pulchowk"})
     assert client.get("/forecast/ratnapark").json()["exceeds_standard"] == "likely"
     assert client.get("/forecast/ratnapark/alert").json()["alert"] is True
     assert client.get("/forecast/pulchowk/alert").json()["alert"] is False
     assert client.get("/forecast/thamel").status_code == 404
-    assert client.get("/health").json()["ok"] is True
+    health = client.get("/health")
+    assert health.status_code == 200 and health.json()["ok"] is True
+    assert health.headers["cache-control"] == "no-store"

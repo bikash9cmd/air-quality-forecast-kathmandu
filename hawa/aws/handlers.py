@@ -28,6 +28,7 @@ from hawa import config
 from hawa.alerts import message, should_alert
 from hawa.data import clean_station
 from hawa.forecast import StationForecast
+from hawa.health import check as check_health
 from hawa.models import Forecaster
 from hawa.pipeline import run_hour, train_with_gate
 from hawa.store import DynamoStore
@@ -201,9 +202,8 @@ def retrain_handler(event: dict, _ctx=None) -> dict:
 
 # ---------- API ----------
 
-def _response(status: int, body: dict) -> dict:
-    return {"statusCode": status, "headers": {"content-type": "application/json",
-                                              "cache-control": "max-age=300"},
+def _response(status: int, body: dict, cache: str = "max-age=300") -> dict:
+    return {"statusCode": status, "headers": {"content-type": "application/json", "cache-control": cache},
             "body": json.dumps(body, ensure_ascii=False)}
 
 
@@ -211,8 +211,10 @@ def api_handler(event: dict, _ctx=None) -> dict:
     path = event.get("rawPath", "")
     store = DynamoStore()
     if path == "/health":
-        modes = {st: (store.latest(st) or {}).get("mode", "missing") for st in config.STATIONS}
-        return _response(200, {"ok": "missing" not in modes.values(), "stations": modes})
+        # Compare against the real clock (shifted by REPLAY_OFFSET_DAYS like every other handler):
+        # a forecast job that stopped keeps serving its last item, and only its age gives it away.
+        result = check_health({st: store.latest(st) for st in config.STATIONS}, now=_now_npt(event))
+        return _response(200 if result["ok"] else 503, result, cache="no-store")
     parts = path.strip("/").split("/")
     if len(parts) >= 2 and parts[0] == "forecast":
         st = parts[1]
