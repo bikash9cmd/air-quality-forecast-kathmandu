@@ -71,7 +71,7 @@ Everything is in [`infra/template.yaml`](../infra/template.yaml) (AWS SAM). One 
 
 **ReservedConcurrency = 1 on the forecaster.** A retried run from the previous hour must not race the current one and overwrite a newer forecast with an older one.
 
-**Observability is about freshness.** The two alarms that matter most are "forecast job errored twice in a row" and "forecast job has not *run* for three hours" (the second catches a disabled schedule, which produces no errors at all). `/health` returns `ok: false` when any station's forecast is missing.
+**Observability is about freshness.** The two alarms that matter most are "forecast job errored twice in a row" and "forecast job has not *run* for three hours" (the second catches a disabled schedule, which produces no errors at all). `/health` returns `ok: false` and HTTP 503 when any station's forecast is missing, more than 2 hours old, or `stale` (no usable data), so a plain uptime check on that route catches a stopped pipeline even when nothing has errored.
 
 ## Local deployment (what runs in this repo today)
 
