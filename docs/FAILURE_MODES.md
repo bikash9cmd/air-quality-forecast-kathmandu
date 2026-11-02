@@ -20,11 +20,11 @@ The fallback's p90 is its p50 x 1.77, the 90th percentile of observed / forecast
 | What fails | How it shows up | How it's detected | What the system does | Residual risk |
 |---|---|---|---|---|
 | One station's sensor goes dark | Ingest gets no row for that station | `MissingReading` metric; `SensorDownAlarm` after 6 hours | Forecast switches to `mode: neighbour` (measured above); response says so in `note` | Error roughly doubles until fixed |
-| Both sensors dark | No data at all | Same alarm; `/health` returns `ok: false` | `mode: stale`, no numbers. **Refusing beats inventing a forecast.** | No forecasts until data returns |
+| Both sensors dark | No data at all | Same alarm; `/health` returns `ok: false` (HTTP 503) | `mode: stale`, no numbers. **Refusing beats inventing a forecast.** | No forecasts until data returns |
 | Sensor returns garbage | `-999` codes, negative averages, spikes above 1,000, stuck values | Counted per rule in the data-quality report | Dropped by the cleaning rules in `hawa/data.py`, each tested | A plausible-looking wrong value (e.g. miscalibration drift) gets through |
 | Upstream changes its file format | Columns renamed or shifted | `read_raw` raises on unexpected columns; ingest fails | Scheduler retries 3x, then the event goes to the DLQ; `DLQNotEmptyAlarm` | Hours of missing ingest; forecast falls back as above |
 | Ingest runs late | Forecast at :15 runs before :05's data landed | `valid_24` < 24 in the forecast input | Features tolerate gaps (LightGBM handles NaN); anchor falls back to 24h mean | Slightly worse forecast for one hour |
-| Forecast Lambda crashes | No new forecast item | `ForecastErrorsAlarm` (2 failed hours) | API keeps serving the last forecast, with its `issued_at` | Users see an older forecast; `/health` flags it after 2h |
+| Forecast Lambda crashes | No new forecast item | `ForecastErrorsAlarm` (2 failed hours) | API keeps serving the last forecast, with its `issued_at` | Users see an older forecast; `/health` returns 503 once the newest forecast is over 2h old |
 | Schedule disabled or deleted | Nothing runs, **so nothing errors** | `ForecastNotRunningAlarm` on zero invocations for 3h (`TreatMissingData: breaching`) | n/a | This is the failure an error-only alarm misses |
 | A retry races the next hour | Older forecast overwrites newer | Prevented, not detected | `ReservedConcurrentExecutions: 1` on the forecaster | None |
 | Bad retrain (a week of bad data, a code bug) | New model worse than old | Promotion gate on the last 30 days | Candidate rejected; champion keeps serving; `RetrainGateAlarm` | Model gets staler until someone looks |

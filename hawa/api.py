@@ -4,13 +4,13 @@ by hawa/aws/handlers.py:api_handler behind API Gateway, without FastAPI, to keep
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 
 from hawa import config
 from hawa.alerts import message, should_alert
 from hawa.forecast import StationForecast
+from hawa.health import check as check_health
 from hawa.store import DynamoStore, LocalStore
 
 app = FastAPI(title="Hawa: Kathmandu Valley PM2.5 forecast", version="1.0.0")
@@ -27,19 +27,16 @@ def _get(station: str) -> dict:
 
 
 @app.get("/health")
-def health() -> dict:
-    """Healthy means: every station has a forecast issued within the last 2 hours (replay
-    time in the local demo). An uptime check on this route catches a dead pipeline."""
-    status = {}
-    for st in config.STATIONS:
-        fc = store.latest(st)
-        status[st] = fc["mode"] if fc else "missing"
-    issued = [store.latest(st)["issued_at"] for st in config.STATIONS if store.latest(st)]
-    newest = max(issued) if issued else None
-    fresh = newest is not None and all(
-        datetime.fromisoformat(i) >= datetime.fromisoformat(newest) - timedelta(hours=2) for i in issued
-    )
-    return {"ok": fresh and "missing" not in status.values(), "stations": status, "latest_issue": newest}
+def health(response: Response) -> dict:
+    """Healthy means: every station has a forecast issued within the last 2 hours, and none of
+    them is `stale`. The local demo runs on a historical replay clock, so "now" is the newest
+    forecast here; the Lambda uses the real clock. Unhealthy answers are HTTP 503, so a plain
+    uptime check catches a dead pipeline."""
+    result = check_health({st: store.latest(st) for st in config.STATIONS})
+    response.headers["cache-control"] = "no-store"
+    if not result["ok"]:
+        response.status_code = 503
+    return result
 
 
 @app.get("/stations")
