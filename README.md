@@ -1,4 +1,4 @@
-# Hawa (हावा): hour-by-hour air-quality forecasts for the Kathmandu Valley
+# Kathmandu Air Quality Forecast: hour-by-hour air-quality forecasts for the Kathmandu Valley
 
 [![Try it live](https://img.shields.io/badge/Try_it-live-2ea44f?style=for-the-badge)](https://hawa-kathmandu-air.onrender.com)
 
