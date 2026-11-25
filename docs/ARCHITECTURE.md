@@ -39,7 +39,7 @@ flowchart LR
     SSM[["SSM Parameter<br/>champion version"]] --> FC
     S3 -->|"model artifact"| FC
     FC --> FT[("DynamoDB<br/>forecasts")]
-    FC -->|"likely / possible exceedance"| SNS{{"SNS topic<br/>air alerts"}}
+    FC -->|"new likely / possible exceedance,<br/>escalation or daily reminder"| SNS{{"SNS topic<br/>air alerts"}}
     SNS --> SUB["email / SMS / app"]
 
     S3 --> RT
