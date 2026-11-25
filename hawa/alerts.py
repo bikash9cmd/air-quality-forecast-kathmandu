@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from hawa import config
 from hawa.forecast import StationForecast, cleanest_hours
 
@@ -10,6 +12,26 @@ STATION_NAMES_NE = {"ratnapark": "रत्नपार्क", "pulchowk": "प
 
 def should_alert(fc: StationForecast) -> bool:
     return fc.exceeds_standard in {"likely", "possible"}
+
+
+def alert_due(fc: StationForecast, last_alert: dict | None) -> bool:
+    """Should the hourly job send `fc`'s alert now, given the last one sent for this station?
+
+    Yes for the first alert, for an escalation from "possible" to "likely", and as a reminder
+    once config.ALERT_REPEAT_HOURS have passed. Otherwise the subscribers already know: the
+    forecast is recomputed every hour, and re-sending it would be one SMS an hour all day.
+    """
+    if not should_alert(fc):
+        return False
+    if not last_alert:
+        return True
+    sent = datetime.fromisoformat(last_alert["sent_at"])
+    now = datetime.fromisoformat(fc.issued_at)
+    if now < sent:  # clock moved backwards (a replay or backfill restarted earlier): start over
+        return True
+    if now - sent >= timedelta(hours=config.ALERT_REPEAT_HOURS):
+        return True
+    return fc.exceeds_standard == "likely" and last_alert.get("level") != "likely"
 
 
 def _hhmm(ts: str) -> str:

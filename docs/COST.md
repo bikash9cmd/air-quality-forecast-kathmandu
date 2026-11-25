@@ -31,7 +31,9 @@ The largest line is monitoring, not ML. That's normal for small serverless syste
 
 ## Alerts: the cost that actually scales
 
-1,000 SMS subscribers x 12 alert days in a bad winter month = 12,000 messages:
+1,000 SMS subscribers x 12 alert days in a bad winter month = 12,000 messages.
+
+That assumes one message per subscriber per alert day, which is what `hawa.alerts.alert_due` enforces: the forecast is recomputed every hour, but a station is alerted when an exceedance starts, again only if it escalates from "possible" to "likely", and otherwise at most once every `ALERT_REPEAT_HOURS` (24). Before that rule the job re-sent the alert every hour it stayed above the limit: 176 alerts in the 1-7 December 2017 replay instead of 8, which would have made the SMS bill below about 24x larger.
 
 | Channel | USD / month |
 |---|---:|

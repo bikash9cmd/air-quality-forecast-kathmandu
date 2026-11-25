@@ -117,7 +117,7 @@ make backtest    # walk-forward backtest; writes artifacts/reports and the chart
 make train       # train on data up to 1 Dec 2017, with the promotion gate
 make replay      # run the hourly job for 1-7 Dec 2017 as if it were live
 make serve       # API on http://localhost:8000  (try /forecast/ratnapark and /docs)
-make test        # 25 tests, including the Lambda handlers against mocked AWS
+make test        # 29 tests, including the Lambda handlers against mocked AWS
 ```
 
 **With Docker:**
@@ -139,7 +139,7 @@ hawa/
   backtest.py     walk-forward evaluation, alert metrics, sensor-outage experiment
   forecast.py     inference with the fallback chain (primary -> neighbour -> refuse)
   pipeline.py     hourly job, replay, retrain with promotion gate
-  alerts.py       English and Nepali alert messages
+  alerts.py       English and Nepali alert messages; when an alert is due (once per episode)
   api.py          FastAPI (local); same routes on Lambda in aws/handlers.py
   store.py        LocalStore and DynamoStore behind one interface
   aws/handlers.py Lambda entry points: ingest, forecast, retrain, api

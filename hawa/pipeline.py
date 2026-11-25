@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from hawa import features as F
-from hawa.alerts import message, should_alert
+from hawa.alerts import alert_due, message
 from hawa.forecast import forecast
 from hawa.models import Forecaster, weekly_profile
 from hawa.store import ForecastStore
@@ -60,15 +60,24 @@ def train_with_gate(wide: pd.DataFrame, champion: Forecaster | None = None,
 
 def run_hour(wide: pd.DataFrame, model: Forecaster, store: ForecastStore, at: pd.Timestamp,
              publish=None) -> list[dict]:
-    """Forecast every station at hour `at`, store the result, publish alerts. Returns the forecasts."""
+    """Forecast every station at hour `at`, store the result, publish alerts that are due.
+
+    Returns the forecasts; one carries an "alert" key only if an alert was sent for it this hour."""
     results = []
     for fc in forecast(wide, model, at):
-        d = fc.as_dict()
-        store.put(d)
-        if should_alert(fc):
+        # The previous forecast remembers the last alert sent, so a long exceedance alerts once
+        # (plus a daily reminder or an escalation) instead of every hour. See alerts.alert_due.
+        previous = store.latest(fc.station)
+        fc.last_alert = previous.get("last_alert") if previous else None
+        msg = None
+        if alert_due(fc, fc.last_alert):
             msg = message(fc)
             if publish:
                 publish(fc.station, msg)
+            fc.last_alert = {"sent_at": fc.issued_at, "level": fc.exceeds_standard}
+        d = fc.as_dict()
+        store.put(d)
+        if msg:
             d["alert"] = msg
         log.info(json.dumps({"event": "forecast", "station": fc.station, "issued_at": fc.issued_at,
                              "mode": fc.mode, "p50": fc.next24h_mean_p50,
