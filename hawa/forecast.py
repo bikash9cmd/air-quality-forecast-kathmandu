@@ -32,6 +32,9 @@ class StationForecast:
     exceeds_standard: str     # likely | possible | unlikely | unknown
     hourly: list[dict]
     note: str = ""
+    # The last alert sent for this station, {"sent_at": issued_at, "level": exceeds_standard},
+    # carried from forecast to forecast so the hourly job can tell a new alert from a repeat.
+    last_alert: dict | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)

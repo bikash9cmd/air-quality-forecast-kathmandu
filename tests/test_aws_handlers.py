@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from decimal import Decimal
 
 import boto3
 import numpy as np
 import pandas as pd
 import pytest
+from boto3.dynamodb.conditions import Key
 from moto import mock_aws
 
 from hawa import features as F
@@ -105,3 +107,24 @@ def test_forecast_falls_back_when_a_sensor_goes_dark(aws_env):
     res = handlers.forecast_handler({"now": str(now)})
     assert res["modes"]["ratnapark"] == "neighbour"
     assert res["modes"]["pulchowk"] == "primary"
+
+
+def test_forecast_handler_does_not_resend_the_same_alert_every_hour(aws_env):
+    from hawa.aws import handlers
+
+    sqs = boto3.client("sqs", region_name=REGION)
+    queue = sqs.create_queue(QueueName="inbox")["QueueUrl"]
+    arn = sqs.get_queue_attributes(QueueUrl=queue, AttributeNames=["QueueArn"])["Attributes"]["QueueArn"]
+    boto3.client("sns", region_name=REGION).subscribe(TopicArn=os.environ["ALERT_TOPIC"], Protocol="sqs", Endpoint=arn)
+
+    now = aws_env["now"]
+    table = boto3.resource("dynamodb", region_name=REGION).Table("forecasts")
+    for h in range(3):  # three consecutive hourly runs of the same exceedance
+        handlers.forecast_handler({"now": str(now + pd.Timedelta(hours=h))})
+        latest = table.query(KeyConditionExpression=Key("station").eq("ratnapark"),
+                             ScanIndexForward=False, Limit=1)["Items"][0]
+        assert latest["exceeds_standard"] in {"likely", "possible"}
+
+    received = sqs.receive_message(QueueUrl=queue, MaxNumberOfMessages=10)["Messages"]
+    stations = [json.loads(m["Body"])["MessageAttributes"]["station"]["Value"] for m in received]
+    assert stations.count("ratnapark") == 1  # one alert for the episode, not one per hour

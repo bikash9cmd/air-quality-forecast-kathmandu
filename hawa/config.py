@@ -49,6 +49,11 @@ ANOMALY_DECAY_HOURS = 9.0
 # percentile of observed / fallback-forecast across the Mar-Dec 2017 backtest (monthly range 1.2-2.2).
 NEIGHBOUR_P90_RATIO = 1.77
 
+# Alerts go to people (email, SMS). While an exceedance lasts, the hourly job re-alerts a station
+# at most once per this many hours, unless the level escalates from "possible" to "likely".
+# docs/COST.md's SMS estimate (one message per subscriber per alert day) depends on it.
+ALERT_REPEAT_HOURS = 24
+
 TRAIN_EVERY_N_HOURS = 3
 
 SEED = 42
